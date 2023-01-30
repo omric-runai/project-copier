@@ -1,12 +1,8 @@
 import requests
 from copy import copy
+import logging
 
-import argparse
-
-parser = argparse.ArgumentParser()
-parser.add_argument('--input', '-i', type=str, required=True, help='Input file path')
-parser.add_argument('--output', '-o', type=str, required=True, help='Output file path')
-args = parser.parse_args()
+requests.urllib3.disable_warnings()
 
 class ClusterData:
     def __init__(self, clusterId, tenant, url, app_name, secret_key) -> None:
@@ -20,7 +16,7 @@ class ClusterData:
     def getToken(self):
         payload = f"grant_type=client_credentials&client_id={self.app_name}&client_secret={self.secret_key}"
         headers = { 'content-type': "application/x-www-form-urlencoded" }
-        r = requests.post(f"{self.url}/auth/realms/{self.tenant}/protocol/openid-connect/token", payload, headers=headers)
+        r = requests.post(f"{self.url}/auth/realms/{self.tenant}/protocol/openid-connect/token", payload, headers=headers, verify=False)
         r.raise_for_status()
 
         self.token = r.json()["access_token"]
@@ -28,61 +24,98 @@ class ClusterData:
     def getProjects(self):
         headers = {'Authorization': 'Bearer ' + self.token}
 
-        projects_r = requests.get(f"{self.url}/v1/k8s/clusters/{self.clusterId}/projects", headers=headers)
+        projects_r = requests.get(f"{self.url}/v1/k8s/clusters/{self.clusterId}/projects", headers=headers, verify=False)
+        projects_r.raise_for_status()
+        return projects_r.json()
+    
+    def getDepartments(self):
+        headers = {'Authorization': 'Bearer ' + self.token}
+
+        projects_r = requests.get(f"{self.url}/v1/k8s/clusters/{self.clusterId}/departments", headers=headers, verify=False)
         projects_r.raise_for_status()
         return projects_r.json()
     
     def putProjects(self, projects):
         headers = {'Authorization': 'Bearer ' + self.token}
-
+        
+        print(f'Updating {len(projects)} projects to new backend...')
+        cnt = 1
         for proj in projects:
-            r = requests.post(f"{self.url}/v1/k8s/clusters/{self.clusterId}/projects", headers=headers, json=proj)
+            print(f'Updating proj {proj["name"]}, {cnt}/{len(projects)} ...')
+
+            r = requests.post(f"{self.url}/v1/k8s/clusters/{self.clusterId}/projects", headers=headers, json=proj, verify=False)
             r.raise_for_status()
+            cnt += 1
     
     def getNodePools(self):
         headers = {'Authorization': 'Bearer ' + self.token}
-        nodepools_r = requests.get(f"{self.url}/v1/k8s/clusters/{self.clusterId}/node-pools", headers=headers)
+        nodepools_r = requests.get(f"{self.url}/v1/k8s/clusters/{self.clusterId}/node-pools", headers=headers, verify=False)
         nodepools_r.raise_for_status()
         return nodepools_r.json()
 
 
-input_cluster = ClusterData("255660e0-b6ac-4ebe-9208-7442b18f7102", "vaquitat", "https://test.run.ai", "omric", "skbBVZF3PTsTMrcVw3IbDdRqAiK5Eclo")
-output_cluster = ClusterData("750acc35-44ed-411a-bfab-196efde4d5a7", "vaquitat", "https://test.run.ai", "omric", "skbBVZF3PTsTMrcVw3IbDdRqAiK5Eclo")
+input_cluster = ClusterData("b957075b-5000-4952-a1d4-67cfa9e433c8", "runai", "https://omric-2-1.runailabs.com", "omric", "5831cfb9-129b-4304-9af2-3a2c41df3b31")
+output_cluster = ClusterData("5500528c-c593-4e4c-93a5-a2e58345af24", "runai", "https://omric-2-8.runailabs.com", "omric", "e80346f6-90cd-4ef5-ba77-effba090ec63")
 
+print("Getting input projects...")
 projects = input_cluster.getProjects()
-input_nodepools = input_cluster.getNodePools()
-output_nodepools = output_cluster.getNodePools()
 
-input_nodepool_names = [x['name'] for x in input_nodepools].sort()
-output_nodepool_names = [x['name'] for x in output_nodepools].sort()
-if input_nodepool_names != output_nodepool_names:
-    print(f"Mismatch in clusters nodepools! input cluster nodepools: {input_nodepool_names}, output cluster nodepools: {output_nodepool_names}")
-    raise ValueError
+print("Getting output nodepools...")
+nodepools = output_cluster.getNodePools()
 
-nodepool_mapping = {}
-for i in input_nodepools:
-    matching_nodepool = None
-    for j in output_nodepools:
-        if j['name'] == i['name']:
-            matching_nodepool = j
-    if matching_nodepool == None:
-        print(f"Error finding matching nodepool for {i['name']}")
-    nodepool_mapping[i['id']] = matching_nodepool['id']
+print("Getting output department...")
+departments = output_cluster.getDepartments()
 
+print(f'Updating {len(projects)} to new scheme...')
 new_projects = []
+cnt = 1
 for proj in projects:
+    print(f'Updating project {proj["name"]}, {cnt}/{len(projects)}')
     new_proj = copy(proj)
-    new_proj['nodePoolsResources'] = []
-    for npr in proj['nodePoolsResources']:
-        new_npr = copy(npr)
-        new_npr['nodePool']['id'] = nodepool_mapping[new_npr['nodePool']['id']]
-        del new_npr['cpu'] 
-        del new_npr['memory'] 
-        new_proj['nodePoolsResources'].append(new_npr)
-    
-    del new_proj['resources']['cpu']
-    del new_proj['resources']['memory']
+    new_proj['clusterUuid'] = output_cluster.clusterId
+    new_proj['tenantId'] = nodepools[0]['tenantId']
+    new_proj['departmentId'] = departments[0]['id']
+    new_proj['interactiveJobTimeLimitSecs'] = "Null"
+    new_proj['resources'] = {
+        "gpu": {
+            "deserved": proj['deservedGpus'],
+            "overQuotaWeight": proj['gpuOverQuotaWeight'],
+            "maxAllowed": proj['maxAllowedGpus']
+        },
+        "cpu": {
+            "overQuotaWeight": proj['gpuOverQuotaWeight'],
+            "maxAllowed": proj['maxAllowedGpus']
+        },
+        "memory": {
+            "overQuotaWeight": proj['gpuOverQuotaWeight'],
+            "maxAllowed": proj['maxAllowedGpus']
+        }
+    }
+    new_proj['nodePoolsResources'] = [{
+        'id': 1,
+        'nodePool': {
+            'id': nodepools[0]['id'],
+            'name': nodepools[0]['name']
+        },
+        "gpu": {
+            "deserved": proj['deservedGpus'],
+            "overQuotaWeight": proj['gpuOverQuotaWeight'],
+            "maxAllowed": proj['maxAllowedGpus']
+        },
+        "cpu": {
+            "overQuotaWeight": 1,
+            "maxAllowed": proj['maxAllowedGpus']
+        },
+        "memory": {
+            "overQuotaWeight": 1,
+            "maxAllowed": proj['maxAllowedGpus']
+        }
+    }]
+
+    del new_proj['interactiveJobTimeLimitSecs']
 
     new_projects.append(new_proj)
+    cnt += 1
 
+print("Posting projects to new backend...")
 output_cluster.putProjects(new_projects)
