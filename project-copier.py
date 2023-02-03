@@ -1,8 +1,11 @@
 import requests
 from copy import copy
-import logging
+import configparser
 
 requests.urllib3.disable_warnings()
+
+config = configparser.ConfigParser()
+config.read('config.ini')
 
 class ClusterData:
     def __init__(self, clusterId, tenant, url, app_name, secret_key) -> None:
@@ -53,9 +56,23 @@ class ClusterData:
         nodepools_r.raise_for_status()
         return nodepools_r.json()
 
+input_cluster_id = config['INPUT']['clusterId']
+input_tenant_name = config['INPUT']['tenantName']
+input_cluster_url = config['INPUT']['clusterUrl']
+input_app_name = config['INPUT']['appName']
+input_app_secret = config['INPUT']['secret']
 
-input_cluster = ClusterData("b957075b-5000-4952-a1d4-67cfa9e433c8", "runai", "https://omric-2-1.runailabs.com", "omric", "5831cfb9-129b-4304-9af2-3a2c41df3b31")
-output_cluster = ClusterData("5500528c-c593-4e4c-93a5-a2e58345af24", "runai", "https://omric-2-8.runailabs.com", "omric", "e80346f6-90cd-4ef5-ba77-effba090ec63")
+output_cluster_id = config['OUTPUT']['clusterId']
+output_tenant_name = config['OUTPUT']['tenantName']
+output_cluster_url = config['OUTPUT']['clusterUrl']
+output_app_name = config['OUTPUT']['appName']
+output_app_secret = config['OUTPUT']['secret']
+
+
+input_cluster = ClusterData(input_cluster_id, input_tenant_name, input_cluster_url, input_app_name, input_app_secret)
+output_cluster = ClusterData(output_cluster_id, output_tenant_name, output_cluster_url, output_app_name, output_app_secret)
+
+
 
 print("Getting input projects...")
 projects = input_cluster.getProjects()
